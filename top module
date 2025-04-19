@@ -1,0 +1,256 @@
+library ieee;
+  use ieee.std_logic_1164.all;
+  use ieee.std_logic_arith.all;
+  use ieee.std_logic_unsigned.all;
+
+entity mips_test is
+   Port (
+        clk : in std_logic;
+        btn : in std_logic_vector(4 downto 0);
+        sw  : in std_logic_vector(15 downto 0);
+        an  : out std_logic_vector(3 downto 0);
+        cat : out std_logic_vector(6 downto 0);
+        led : out std_logic_vector(15 downto 0)
+   );
+end mips_test;
+
+architecture Behavioral of mips_test is
+
+component inst_fetch is
+  Port ( -- inputs
+         clk             : in std_logic;
+         pc_en           : in std_logic;
+         pc_res          : in std_logic;
+         branch_trg_addr : in std_logic_vector(15 downto 0);
+         jump_address    : in std_logic_vector(15 downto 0);
+         -- control
+         ctrl_branch     : in std_logic;
+         ctrl_jump       : in std_logic;
+         -- output
+         pc_plus_one     : out std_logic_vector(15 downto 0);
+         instruction     : out std_logic_vector(15 downto 0)
+  );
+end component;
+
+component mono_pulse_gen is
+  port (
+    clk    : in std_logic;
+    btn    : in  std_logic_vector(4  downto 0);
+    enable : out  std_logic_vector(4  downto 0)
+  );
+end component;
+
+component seven_seg_disp is
+  port (
+    clk    : in  std_logic;
+    digits : in  std_logic_vector(15 downto 0);   
+    an     : out std_logic_vector(3  downto 0);
+    cat    : out std_logic_vector(6  downto 0)
+  );
+end component;
+
+component instr_decode is
+    Port (
+        clk          : in std_logic;
+        --ctrl inputs
+        reg_write     : in std_logic;
+        reg_dst       : in std_logic;
+        ext_op        : in std_logic;
+        --data inputs
+        instruction   : in std_logic_vector(15 downto 0);
+        write_data    : in std_logic_vector(15 downto 0);
+        --outputs
+        read_data_1   : out std_logic_vector(15 downto 0);
+        read_data_2   : out std_logic_vector(15 downto 0);
+        shift_amount  : out std_logic;
+        function_bits : out std_logic_vector(2 downto 0);
+        ext_imm       : out std_logic_vector(15 downto 0);
+        sum_value     : out std_logic_vector(15 downto 0)
+     );
+end component;
+
+component instr_execute is
+    Port ( 
+       --inputs
+       operand_1     : in std_logic_vector(15 downto 0);
+       operand_2     : in std_logic_vector(15 downto 0);
+       ext_imm       : in std_logic_vector(15 downto 0);
+       pc_plus_one   : in std_logic_vector(15 downto 0);
+       function_bits : in std_logic_vector(2 downto 0);
+       shift_amount  : in std_logic;
+       --control signals
+       aluSrc        : in std_logic;
+       aluOp         : in std_logic_vector(2 downto 0);
+       --outputs
+       branch_addr   : out std_logic_vector(15 downto 0);
+       result        : out std_logic_vector(15 downto 0);
+       zero_flag     : out std_logic;
+       mul_flag      : out std_logic;
+       HI_reg        : out std_logic_vector(15 downto 0);
+       LO_reg        : out std_logic_vector(15 downto 0)
+    );
+end component;
+
+component mem_unit is
+     Port (
+        clk         : in std_logic;
+        we          : in std_logic;
+        addr        : in std_logic_vector(15 downto 0);
+        di          : in std_logic_vector(15 downto 0);
+        do          : out std_logic_vector(15 downto 0) 
+     );
+end component;
+
+component mainCU is
+    Port ( 
+        -- inputs
+        op_code : in std_logic_vector(2 downto 0);
+        -- outputs
+        reg_dst     : out std_logic;
+        ext_op      : out std_logic;
+        alu_src     : out std_logic;
+        branch      : out std_logic;
+        jump        : out std_logic;
+        alu_op      : out std_logic_vector(2 downto 0);
+        mem_write   : out std_logic;
+        mem_to_reg  : out std_logic;
+        reg_write   : out std_logic   
+    );
+end component;
+
+--control signals
+signal c_mul_control   : std_logic;
+signal c_reg_dst       : std_logic;
+signal c_ext_op        : std_logic;
+signal c_reg_write     : std_logic;
+signal c_alu_src       : std_logic;
+signal c_branch        : std_logic;
+signal c_jump          : std_logic;
+signal c_alu_op        : std_logic_vector(2 downto 0);
+signal c_mem_write     : std_logic;
+signal c_mem_to_reg    : std_logic;
+signal c_final_reg_w   : std_logic;
+signal c_final_mem_w   : std_logic;
+signal pipe_controls   : std_logic_vector(8 downto 0);
+
+--instruction fetch
+signal jump_address    : std_logic_vector(15 downto 0);
+signal branch_trg_addr : std_logic_vector(15 downto 0);
+signal ctrl_branch     : std_logic;
+signal mpg_out         : std_logic_vector(4 downto 0);
+signal next_instr_addr : std_logic_vector(15 downto 0);
+signal instruction     : std_logic_vector(15 downto 0);
+
+--instruction decode
+signal decoded_instr   : std_logic_vector(15 downto 0);
+signal read_data_1     : std_logic_vector(15 downto 0);
+signal read_data_2     : std_logic_vector(15 downto 0);
+signal shift_amount    : std_logic;
+signal function_bits   : std_logic_vector(2 downto 0);
+signal ext_imm         : std_logic_vector(15 downto 0);
+
+--instruction execute 
+signal s_mul_flag      : std_logic;
+signal zero_flag       : std_logic;
+signal result          : std_logic_vector(15 downto 0);
+signal HI_reg          : std_logic_vector(15 downto 0);
+signal LO_reg          : std_logic_vector(15 downto 0);
+
+--memory unit
+signal memory_data     : std_logic_vector(15 downto 0);
+signal memory_res      : std_logic_vector(15 downto 0); 
+
+--top module
+signal ssd_out         : std_logic_vector(15 downto 0);
+signal write_back      : std_logic_vector(15 downto 0);
+signal sum_to_ssd      : std_logic_vector(15 downto 0);
+
+begin
+
+ctrl_branch  <= '1' when c_branch = '1' and zero_flag = '1' else '0';
+write_back   <= memory_data when c_mem_to_reg = '1' else result;
+
+jump_address <= "000" & instruction(12 downto 0);
+
+c_final_reg_w <= mpg_out(0) and c_reg_write;
+c_final_mem_w <= mpg_out(0) and c_mem_write;
+
+
+mpg : mono_pulse_gen port map(
+        clk => clk,
+        btn => btn,
+        enable => mpg_out
+);
+
+ssd  : seven_seg_disp port map(
+        clk    => clk,
+        digits => ssd_out,
+        an     => an,
+        cat    => cat
+);
+
+instruction_fetch : inst_fetch port map(
+        clk             => clk,
+        pc_en           => mpg_out(0),
+        pc_res          => mpg_out(1),
+        branch_trg_addr => branch_trg_addr,
+        jump_address    => jump_address,
+        ctrl_branch     => ctrl_branch,
+        ctrl_jump       => c_jump,
+        pc_plus_one     => next_instr_addr,
+        instruction      => instruction
+);
+
+instruction_decode : instr_decode port map(
+        clk           => clk,
+        reg_write     => c_final_reg_w,
+        reg_dst       => c_reg_dst,
+        ext_op        => c_ext_op,
+        instruction   => instruction,
+        write_data    => write_back,
+        read_data_1   => read_data_1,
+        read_data_2   => read_data_2,
+        shift_amount  => shift_amount,
+        function_bits => function_bits,
+        ext_imm       => ext_imm,
+        sum_value     => sum_to_ssd
+);
+
+instruction_execute : instr_execute port map(
+        operand_1     => read_data_1,
+        operand_2     => read_data_2,
+        ext_imm       => ext_imm,
+        pc_plus_one   => next_instr_addr,
+        function_bits => function_bits,
+        shift_amount  => shift_amount,
+        aluSrc        => c_alu_src,
+        aluOp         => c_alu_op,
+        branch_addr   => branch_trg_addr,
+        result        => result,
+        zero_flag     => zero_flag,
+        mul_flag      => s_mul_flag,
+        HI_reg        => HI_reg,
+        LO_reg        => LO_reg
+);
+
+memory_unit : mem_unit port map(
+        clk         => clk,
+        we          => c_final_mem_w,
+        addr        => result,
+        di          => read_data_2,
+        do          => memory_data
+);
+
+control_unit : mainCU port map(
+        op_code     => instruction(15 downto 13),
+        reg_dst     => c_reg_dst,
+        ext_op      => c_ext_op,
+        alu_src     => c_alu_src,
+        branch      => c_branch,
+        jump        => c_jump,
+        alu_op      => c_alu_op,
+        mem_write   => c_mem_write,
+        mem_to_reg  => c_mem_to_reg,
+        reg_write   => c_reg_write
+);
+end Behavioral;
